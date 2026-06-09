@@ -1,78 +1,140 @@
 import streamlit as st
 from google import genai
 from google.genai import types
-from google.genai.errors import APIError
 
-# 1. 페이지 설정 및 제목
-st.set_page_config(page_title="달콤살벌 연애상담소", page_icon="💌")
-st.title("💌 달콤살벌 연애상담소")
-st.caption("Gemini 2.5 Flash-Lite가 당신의 연애 고민을 들어줍니다.")
+# -----------------------------
+# 페이지 설정
+# -----------------------------
+st.set_page_config(
+    page_title="청소년 진로상담 챗봇",
+    page_icon="🎓",
+    layout="centered"
+)
 
-# 2. Streamlit Secrets에서 API 키 불러오기 및 클라이언트 초기화
+st.title("🎓 청소년 진로상담 챗봇")
+st.caption("관심사, 적성, 진학, 직업 선택에 대해 상담해보세요.")
+
+# -----------------------------
+# API 키 로드
+# -----------------------------
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
     client = genai.Client(api_key=api_key)
-except KeyError:
-    st.error("Streamlit Secrets에 'GEMINI_API_KEY'가 설정되지 않았습니다. 설정 후 다시 시도해주세요.")
+
+except Exception:
+    st.error(
+        "GEMINI_API_KEY를 Streamlit Secrets에 설정해주세요."
+    )
     st.stop()
 
-# 3. 세션 상태(Session State)로 채팅 기록 초기화
+# -----------------------------
+# 시스템 프롬프트
+# -----------------------------
+SYSTEM_PROMPT = """
+당신은 청소년 진로상담 전문 AI입니다.
+
+역할:
+- 중학생, 고등학생 대상 진로상담 제공
+- 학생의 관심사, 성격, 강점을 파악
+- 다양한 진로와 직업을 소개
+- 특정 직업을 강요하지 않음
+- 현실적인 학습 방법과 준비 과정을 설명
+- 친절하고 이해하기 쉬운 한국어 사용
+
+상담 원칙:
+1. 학생의 상황을 먼저 파악한다.
+2. 여러 선택지를 제시한다.
+3. 장점과 고려사항을 균형 있게 설명한다.
+4. 불확실한 정보는 단정하지 않는다.
+5. 학생의 자기결정을 존중한다.
+
+답변은 구체적이고 실용적으로 작성하라.
+"""
+
+# -----------------------------
+# 채팅 기록 초기화
+# -----------------------------
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content": (
+                "안녕하세요! 😊\n\n"
+                "저는 청소년 진로상담 챗봇입니다.\n"
+                "관심 있는 과목, 좋아하는 활동, 고민 중인 진로를 알려주시면 함께 탐색해볼게요."
+            )
+        }
+    ]
 
-# 4. 기존 대화 기록 화면에 출력
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+# -----------------------------
+# 기존 대화 출력
+# -----------------------------
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# 5. 사용자 입력 받기
-if prompt := st.chat_input("연애 고민을 편하게 털어놓으세요..."):
-    # 사용자 메시지 화면에 표시 및 세션에 저장
+# -----------------------------
+# Gemini 응답 생성 함수
+# -----------------------------
+def get_gemini_response():
+    conversation = SYSTEM_PROMPT + "\n\n"
+
+    for msg in st.session_state.messages:
+        role = "사용자" if msg["role"] == "user" else "상담사"
+        conversation += f"{role}: {msg['content']}\n"
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-lite",
+        contents=conversation,
+        config=types.GenerateContentConfig(
+            temperature=0.7,
+            max_output_tokens=1000,
+        )
+    )
+
+    return response.text
+
+
+# -----------------------------
+# 사용자 입력
+# -----------------------------
+if prompt := st.chat_input("진로에 대해 무엇이든 물어보세요"):
+
+    st.session_state.messages.append(
+        {"role": "user", "content": prompt}
+    )
+
     with st.chat_message("user"):
         st.markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # 6. Gemini 모델을 통한 답변 생성 (오류 처리 포함)
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        message_placeholder.markdown("🤔 고민 접수 중... 잠시만 기다려주세요.")
-        
+
         try:
-            # 연애 상담가 페르소나 부여를 위한 시스템 지침 설정
-            system_instruction = (
-                "당신은 공감 능력이 뛰어나면서도 필요할 땐 뼈 때리는 조언을 아끼지 않는 "
-                "프로 연애 상담가입니다. 친근하고 다정한 말투를 사용하되, 진정성 있게 답변해주세요."
-            )
-            
-            # 대화 기록 형식 변환 (Gemini SDK 규격에 맞춤)
-            contents = []
-            for msg in st.session_state.messages:
-                role = "user" if msg["role"] == "user" else "model"
-                contents.append(types.Content(
-                    role=role,
-                    parts=[types.Part.from_text(text=msg["content"])]
-                ))
-            
-            # API 호출 (gemini-2.5-flash-lite 모델 사용)
-            response = client.models.generate_content(
-                model='gemini-2.5-flash-lite',
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    temperature=0.7,
+            with st.spinner("생각 중입니다..."):
+
+                answer = get_gemini_response()
+
+                st.markdown(answer)
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer
+                    }
                 )
-            )
-            
-            # 답변 출력 및 세션에 저장
-            ai_response = response.text
-            message_placeholder.markdown(ai_response)
-            st.session_state.messages.append({"role": "assistant", "content": ai_response})
-            
-        except APIError as e:
-            # 구글 API 측 에러 처리
-            message_placeholder.empty()
-            st.error(f"Gemini API 오류가 발생했습니다: {e.message}")
+
         except Exception as e:
-            # 기타 예기치 못한 에러 처리
-            message_placeholder.empty()
-            st.error(f"시스템 오류가 발생했습니다: {str(e)}")
+
+            error_message = (
+                "죄송합니다. 응답 생성 중 오류가 발생했습니다.\n\n"
+                f"오류 내용: {str(e)}"
+            )
+
+            st.error(error_message)
+
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": error_message
+                }
+            )
